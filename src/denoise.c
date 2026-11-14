@@ -45,6 +45,22 @@
 
 #define SQUARE(x) ((x)*(x))
 
+/* Keep a small amount of the high-band gain when speech is present.  The
+   model is deliberately conservative in these bands, which makes fricatives
+   sound dull even though it removes most of the noise. */
+static const float band_preservation[NB_BANDS] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0.35f, 0.45f, 0.55f, 0.65f, 0.75f,
+  0.85f, 0.95f, 0.95f, 0.85f, 0.75f,
+  0.65f, 0.55f, 0.45f
+};
+
+static float smoothstep01(float x) {
+  x = MIN16(1.f, MAX16(0.f, x));
+  return x*x*(3.f - 2.f*x);
+}
+
 
 #ifndef TRAINING
 #define TRAINING 0
@@ -79,6 +95,8 @@ struct DenoiseState {
   int last_period;
   float mem_hp_x[2];
   float lastg[NB_BANDS];
+  float noise_band[NB_BANDS];
+  int noise_band_ready;
   RNNState rnn;
   kiss_fft_cpx delayed_X[FREQ_SIZE];
   kiss_fft_cpx delayed_P[FREQ_SIZE];
@@ -472,14 +490,47 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   silence = rnn_compute_frame_features(st, X, P, Ex, Ep, Exp, features, x);
 
   if (!silence) {
+    float E_total = 0;
+    float E_high = 0;
+    float E_noise = 0;
+    float E_noise_high = 0;
+    float hf_presence;
+    float flat_noise;
+    float speech;
+    float alpha;
 #if !TRAINING
     compute_rnn(&st->model, &st->rnn, g, &vad_prob, features, st->arch);
 #endif
+    if (!st->noise_band_ready) {
+      for (i=0;i<NB_BANDS;i++) st->noise_band[i] = Ex[i];
+      st->noise_band_ready = 1;
+    } else if (vad_prob < .35f) {
+      for (i=0;i<NB_BANDS;i++)
+        st->noise_band[i] = .90f*st->noise_band[i] + .10f*Ex[i];
+    }
+    for (i=0;i<NB_BANDS;i++) {
+      E_total += Ex[i];
+      E_noise += st->noise_band[i];
+      if (i >= 19) {
+        E_high += Ex[i];
+        E_noise_high += st->noise_band[i];
+      }
+    }
+    hf_presence = smoothstep01((E_high/(E_total + 1e-6f) - .03f)/.10f);
+    flat_noise = smoothstep01((E_noise_high/(E_noise + 1e-6f) - .35f)/.20f);
+    speech = smoothstep01((vad_prob - .55f)/.35f);
+    alpha = .15f + .15f*vad_prob;
     rnn_pitch_filter(st->delayed_X, st->delayed_P, st->delayed_Ex, st->delayed_Ep, st->delayed_Exp, g);
     for (i=0;i<NB_BANDS;i++) {
-      float alpha = .6f;
-      /* Cap the decay at 0.6 per frame, corresponding to an RT60 of 135 ms.
-         That avoids unnaturally quick attenuation. */
+      float band_snr = (Ex[i] + 1e-8f)/(st->noise_band[i] + 1e-8f);
+      float confidence = smoothstep01((band_snr - 1.2f)/3.f);
+      confidence = MAX16(confidence, .50f*flat_noise);
+      float floor = band_preservation[i]*speech*(.25f + .75f*hf_presence)*confidence;
+      /* Preserve fricatives only where both VAD and the local band SNR
+         indicate speech.  Flat-spectrum noise needs a little more high-band
+         headroom than low-frequency-dominated noise. */
+      g[i] = MAX16(g[i], floor);
+      /* Release faster when the VAD is uncertain and slower during speech. */
       g[i] = MAX16(g[i], alpha*st->lastg[i]);
       /* Compensate for energy change across frame when computing the threshold gain.
          Avoids leaking noise when energy increases (e.g. transient noise). */
@@ -502,4 +553,3 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   RNN_COPY(st->delayed_Exp, Exp, NB_BANDS);
   return vad_prob;
 }
-
