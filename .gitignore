@@ -1,0 +1,15 @@
+# Build output
+/build/
+*.o
+*.a
+
+# Generated model weights (see download_model.sh)
+/src/rnnoise_data.c
+/src/rnnoise_data.h
+/src/rnnoise_data_little.c
+/src/rnnoise_data_little.h
+/models/
+/rnnoise_data-*.tar.gz
+
+# Local evaluation artifacts
+/eval/work/
