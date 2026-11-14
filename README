@@ -31,6 +31,62 @@ PCM files sampled at 48 kHz. It can be used as:
 The output is also a 16-bit raw PCM file.
 NOTE AGAIN, THE INPUT and OUTPUT ARE IN RAW FORMAT, NOT WAV.
 
+== Voice Activity Detection ==
+
+In addition to denoising, RNNoise exposes a voice activity detection (VAD)
+wrapper that outputs a per-frame speech probability and a stable binary
+decision for upper-layer silence detection. The public API is in
+include/rnnoise_vad.h and built into librnnoise.
+
+Each call consumes one 10 ms frame (rnnoise_vad_frame_size(), 480 samples at
+48 kHz) and is fully causal, so the algorithmic latency is at most one frame.
+The wrapper adds three stages on top of the network's raw probability:
+
+  * a causal attack/release envelope follower whose output is monotonic on
+    each rise/fall leg and never overshoots the raw probability;
+  * a configurable threshold with hysteresis for stable boundaries;
+  * minimum speech/silence run lengths and a speech hold (hangover) so brief
+    sub-threshold dips inside an utterance do not fragment speech.
+
+Minimal usage:
+
+  RNNoiseVAD *vad = rnnoise_vad_create(NULL);
+  RNNoiseVADConfig config;
+  rnnoise_vad_get_config(vad, &config);
+  config.threshold = 0.45;            /* tune for the deployment */
+  rnnoise_vad_set_config(vad, &config);
+  while (have_frame) {
+    float raw;
+    float p = rnnoise_vad_process(vad, frame, &raw);
+    int speech = rnnoise_vad_is_speech(vad);
+  }
+  rnnoise_vad_destroy(vad);
+
+The vad_demo example provides three modes on raw 48 kHz mono 16-bit PCM:
+
+  % ./examples/vad_demo -p input.pcm [out.csv] [threshold]
+  % ./examples/vad_demo -e input.pcm labels.txt [threshold]
+  % ./examples/vad_demo -s input.pcm labels.txt
+
+-p prints frame index, time, raw probability, smoothed probability and the
+binary decision as CSV; -e scores frame-level false-alarm and miss rates
+against a per-frame label file (1 = speech, 0 = silence); -s sweeps the
+decision threshold and reports the confusion matrix at each point.
+
+A labelled noisy-speech corpus can be generated locally (requires ffmpeg
+with libflite) with:
+
+  % python3 scripts/gen_vad_corpus_tts.py /tmp/vad_corpus
+
+It mixes flite-synthesized utterances with shaped noise at 0/5/10/15 dB SNR
+and emits one .labels file per clip. On that corpus the default configuration
+(threshold 0.45) keeps the frame-level false-alarm rate below 5% and the miss
+rate below 3% for the 5-15 dB conditions; the 0 dB extreme is reported for
+reference. A second, fully synthetic generator without ffmpeg is available at
+scripts/gen_vad_corpus.py for pipeline smoke testing. The property checks in
+examples/vad_test.c verify probability bounds, envelope monotonicity and
+parameter clamping.
+
 The latest version of the source is available from
 https://gitlab.xiph.org/xiph/rnnoise .  The GitHub repository
 is a convenience copy.

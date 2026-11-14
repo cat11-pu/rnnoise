@@ -4,7 +4,7 @@ AM_CFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/src $(DEPS_CFLAGS)
 
 dist_doc_DATA = COPYING AUTHORS README
 
-include_HEADERS = include/rnnoise.h
+include_HEADERS = include/rnnoise.h include/rnnoise_vad.h
 
 lib_LTLIBRARIES = librnnoise.la
 noinst_HEADERS = src/arch.h  \
@@ -29,6 +29,7 @@ noinst_HEADERS = src/arch.h  \
 
 RNNOISE_SOURCES = \
 	src/denoise.c \
+	src/vad.c \
 	src/rnn.c \
 	src/pitch.c \
 	src/kiss_fft.c \
@@ -56,11 +57,17 @@ librnnoise_la_LDFLAGS = -no-undefined \
 
 noinst_PROGRAMS = dump_features dump_weights_blob
 if OP_ENABLE_EXAMPLES
-noinst_PROGRAMS += examples/rnnoise_demo
+noinst_PROGRAMS += examples/rnnoise_demo examples/vad_demo examples/vad_test
 endif
 
 examples_rnnoise_demo_SOURCES = examples/rnnoise_demo.c
 examples_rnnoise_demo_LDADD = librnnoise.la
+
+examples_vad_demo_SOURCES = examples/vad_demo.c
+examples_vad_demo_LDADD = librnnoise.la
+
+examples_vad_test_SOURCES = examples/vad_test.c
+examples_vad_test_LDADD = librnnoise.la
 
 dump_features_SOURCES = src/dump_features.c src/denoise.c src/pitch.c src/celt_lpc.c src/kiss_fft.c src/parse_lpcnet_weights.c src/rnnoise_tables.c
 dump_features_LDADD = $(LIBM)
